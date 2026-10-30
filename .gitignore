@@ -1,0 +1,15 @@
+# Secretos y entorno
+.env
+*.env
+
+# Respaldos generados por el Core
+*.bak
+
+# Proyectos generados localmente (opcional si son temporales)
+proyectos/*
+!proyectos/.gitkeep
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
