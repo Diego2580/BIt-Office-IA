@@ -1,21 +1,20 @@
-import os
-import sys
-import json
-import time
-import socket
-import shutil
-import asyncio
 import argparse
-import urllib.request
+import asyncio
+import json
+import os
+import shutil
+import sys
+import time
 import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import uvicorn
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 ENV_FILE = Path(".env")
 DEFAULT_PROJECTS_DIR = Path.cwd() / "proyectos"
@@ -26,8 +25,9 @@ INDEX_HTML = WEB_DIR / "index.html"
 MODELS_CATALOG = {
     "LITE": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"],
     "STANDARD": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"],
-    "PRO": ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    "PRO": ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"],
 }
+
 
 def get_api_key() -> str:
     key = os.getenv("GEMINI_API_KEY")
@@ -47,16 +47,18 @@ def get_api_key() -> str:
     if not key:
         print("[ERROR] La clave de API es obligatoria.")
         sys.exit(1)
-    
+
     with open(ENV_FILE, "a", encoding="utf-8") as f:
         f.write(f'GEMINI_API_KEY="{key}"\n')
     return key
 
+
 GEMINI_API_KEY = get_api_key()
+
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -66,13 +68,13 @@ class ConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-    async def broadcast(self, event_type: str, agent: str, message: str, payload: Optional[Dict[str, Any]] = None):
+    async def broadcast(self, event_type: str, agent: str, message: str, payload: dict[str, Any] | None = None):
         data = {
             "timestamp": time.strftime("%H:%M:%S"),
             "event_type": event_type,
             "agent": agent,
             "message": message,
-            "payload": payload or {}
+            "payload": payload or {},
         }
         dead_connections = []
         for connection in self.active_connections:
@@ -83,7 +85,9 @@ class ConnectionManager:
         for dead in dead_connections:
             self.disconnect(dead)
 
+
 manager = ConnectionManager()
+
 
 def validate_python_syntax(files: list) -> tuple[bool, list]:
     errors = []
@@ -96,8 +100,9 @@ def validate_python_syntax(files: list) -> tuple[bool, list]:
             except SyntaxError as e:
                 errors.append(f"'{rel_path}' linea {e.lineno}: {e.msg}")
             except Exception as e:
-                errors.append(f"'{rel_path}': error ({str(e)})")
+                errors.append(f"'{rel_path}': error ({e!s})")
     return len(errors) == 0, errors
+
 
 def classify_task_complexity(task: str, existing_files_count: int) -> dict:
     task_lower = task.lower()
@@ -106,12 +111,12 @@ def classify_task_complexity(task: str, existing_files_count: int) -> dict:
     heavy_keywords = [
         "arquitectura", "refactor", "patron", "microservicio", "rediseña",
         "concurrencia", "asincrono complejo", "inyeccion de dependencias", "escalabilidad",
-        "migra", "seguridad avanzada", "oauth", "jwt completo", "multitenant", "database"
+        "migra", "seguridad avanzada", "oauth", "jwt completo", "multitenant", "database",
     ]
     light_keywords = [
         "agrega un campo", "docstring", "corrige", "cambia el puerto",
         "imprime", "variable", "status", "health", "renombra", "comentario",
-        "formato", "version", "tipo", "tipado", "endpoint simple", "ajusta", "info"
+        "formato", "version", "tipo", "tipado", "endpoint simple", "ajusta", "info",
     ]
 
     is_heavy = any(kw in task_lower for kw in heavy_keywords) or words_count > 45 or existing_files_count > 15
@@ -136,49 +141,49 @@ def classify_task_complexity(task: str, existing_files_count: int) -> dict:
         "primary_model": models_chain[0],
         "models_chain": models_chain,
         "reason": reason,
-        "words_count": words_count
+        "words_count": words_count,
     }
+
 
 async def call_gemini_with_telemetry(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
     agent_name: str,
-    models_chain: List[str],
-    max_output_tokens: int = 4096
+    models_chain: list[str],
+    max_output_tokens: int = 4096,
 ) -> dict:
     payload = {
         "contents": [{
-            "parts": [{"text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"}]
+            "parts": [{"text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"}],
         }],
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.1,
-            "maxOutputTokens": max_output_tokens
-        }
+            "maxOutputTokens": max_output_tokens,
+        },
     }
     data_bytes = json.dumps(payload).encode("utf-8")
-
     last_error = None
 
     for model in models_chain:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         stop_heartbeat = asyncio.Event()
 
-        async def heartbeat_worker():
+        async def heartbeat_worker(target_model: str = model, stop_event: asyncio.Event = stop_heartbeat):
             elapsed = 0
             milestones = [
-                (2, f"Conectando con {model}..."),
-                (6, f"Generando código fuente de producción..."),
-                (14, f"Construyendo schemas y endpoints..."),
-                (22, f"Finalizando contratos y respuestas...")
+                (2, f"Conectando con {target_model}..."),
+                (6, "Generando código fuente de producción..."),
+                (14, "Construyendo schemas y endpoints..."),
+                (22, "Finalizando contratos y respuestas..."),
             ]
             m_idx = 0
-            while not stop_heartbeat.is_set():
+            while not stop_event.is_set():
                 try:
-                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=1.0)
+                    await asyncio.wait_for(stop_event.wait(), timeout=1.0)
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     elapsed += 1
                     if m_idx < len(milestones) and elapsed >= milestones[m_idx][0]:
                         await manager.broadcast("AGENT_LOG", agent_name, f"{milestones[m_idx][1]} ({elapsed}s)")
@@ -186,20 +191,21 @@ async def call_gemini_with_telemetry(
                     elif elapsed > 22 and elapsed % 8 == 0:
                         await manager.broadcast("AGENT_LOG", agent_name, f"Escribiendo módulos... ({elapsed}s)")
 
-        heartbeat_task = asyncio.create_task(heartbeat_worker())
+        heartbeat_task = asyncio.create_task(heartbeat_worker(model, stop_heartbeat))
 
-        def _do_request():
+        def _do_request(target_url: str = url):
             req = urllib.request.Request(
-                url,
+                target_url,
                 data=data_bytes,
                 headers={"Content-Type": "application/json"},
-                method="POST"
+                method="POST",
             )
-            with urllib.request.urlopen(req, timeout=90) as response:
+            # nosec B310: URL generada exclusivamente contra la API HTTPS oficial de Google
+            with urllib.request.urlopen(req, timeout=90) as response:  # nosec B310
                 return response.read().decode("utf-8")
 
         try:
-            res_body = await asyncio.to_thread(_do_request)
+            res_body = await asyncio.to_thread(_do_request, url)
             res_json = json.loads(res_body)
 
             if "candidates" not in res_json or not res_json["candidates"]:
@@ -234,14 +240,14 @@ async def call_gemini_with_telemetry(
                 await manager.broadcast(
                     "AGENT_LOG",
                     agent_name,
-                    f"Modelo '{model}' no disponible ({e.code}). Conmutando al siguiente modelo del pool..."
+                    f"Modelo '{model}' no disponible ({e.code}). Conmutando al siguiente modelo del pool...",
                 )
                 continue
-            raise RuntimeError(f"HTTP Error {e.code}: {error_body}")
+            raise RuntimeError(f"HTTP Error {e.code}: {error_body}") from e
 
         except Exception as e:
             last_error = str(e)
-            await manager.broadcast("AGENT_LOG", agent_name, f"Incidencia con '{model}': {str(e)}. Probando alternativa...")
+            await manager.broadcast("AGENT_LOG", agent_name, f"Incidencia con '{model}': {e!s}. Probando alternativa...")
             continue
 
         finally:
@@ -252,6 +258,7 @@ async def call_gemini_with_telemetry(
                 pass
 
     raise RuntimeError(f"Modelos agotados en la cadena de ejecución. Último error: {last_error}")
+
 
 async def execute_pipeline_async(target_dir: Path, task: str):
     await manager.broadcast("PIPELINE_START", "ORCHESTRATOR", f"Iniciando ciclo en {target_dir.name}", {"task": task})
@@ -268,7 +275,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
     raw_memory = memory_file.read_text(encoding="utf-8") if memory_file.exists() else ""
     security_file = target_dir / "SECURITY_AUDIT.json"
 
-    # --- ENRUTAMIENTO Y PREDICCIÓN DE TIER ---
+    # Enrutamiento Heurístico
     routing = classify_task_complexity(task, len(existing_files))
     tier = routing["tier"]
     selected_model = routing["primary_model"]
@@ -279,10 +286,10 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         "ROUTER_DECISION",
         "ORCHESTRATOR",
         f"Enrutador IA [{tier}]: Asignado '{selected_model}' ({reason})",
-        routing
+        routing,
     )
 
-    # --- CONSTRUCTOR DE CONTEXTO OPTIMIZADO (TOKEN PRUNING) ---
+    # Constructor de Contexto Optimizado
     if tier == "TIER_LITE":
         if raw_memory:
             sections = raw_memory.split("## Tarea Completada")
@@ -315,7 +322,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
             await manager.broadcast(
                 "AGENT_LOG",
                 "ORCHESTRATOR",
-                f"Ahorro de tokens activo [TIER_LITE]: Contexto podado (~{pruned_chars // 4} tokens de entrada vs ~{full_chars // 4} sin podar. {pct_saved}% de ahorro)."
+                f"Ahorro de tokens activo [TIER_LITE]: Contexto podado (~{pruned_chars // 4} tokens de entrada vs ~{full_chars // 4} sin podar. {pct_saved}% de ahorro).",
             )
     else:
         memory_context = raw_memory if raw_memory else "Sin historial previo."
@@ -327,7 +334,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         "AGENT_STATUS",
         "TECH_LEAD",
         f"Generando solución optimizada con '{selected_model}'...",
-        {"status": "THINKING", "model": selected_model, "tier": tier}
+        {"status": "THINKING", "model": selected_model, "tier": tier},
     )
 
     leader_system = (
@@ -350,10 +357,10 @@ async def execute_pipeline_async(target_dir: Path, task: str):
             leader_input,
             "TECH_LEAD",
             models_chain,
-            max_output_tokens=max_output_tokens
+            max_output_tokens=max_output_tokens,
         )
     except Exception as e:
-        await manager.broadcast("AGENT_FAILED", "TECH_LEAD", f"Error en generación: {str(e)}", {"status": "ERROR"})
+        await manager.broadcast("AGENT_FAILED", "TECH_LEAD", f"Error en generación: {e!s}", {"status": "ERROR"})
         return
 
     plan_desc = plan_data.get("plan", "Sin plan declarado")
@@ -368,7 +375,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         return
     await manager.broadcast("AGENT_SUCCESS", "QA_LOCAL", "Sintaxis verificada (0 errores de compilación)", {"status": "APPROVED"})
 
-    # 3. QA DevSecOps (CALIBRADO PARA ENDPOINTS PÚBLICOS)
+    # 3. QA DevSecOps
     await manager.broadcast("AGENT_STATUS", "QA_DEVSECOPS", "Auditando vulnerabilidades y estándares OWASP...", {"status": "THINKING"})
     devsecops_system = (
         "ACTÚA COMO: Principal Security Architect & Lead DevSecOps Auditor.\n"
@@ -380,9 +387,9 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         "- Criptografía obsoleta o passwords sin hash/salt adecuado.\n"
         "- Endpoints que modifiquen datos (POST/PUT/DELETE) o lean información sensible/PII sin autenticación.\n\n"
         "REGLA DE OBSERVABILIDAD Y METADATA (NO VETAR):\n"
-        "- Endpoints operativos e informativos como '/health', '/status', '/version', '/ping' o '/info' son PÚBLICOS por estándar de la industria (Kubernetes, Docker, Load Balancers).\n"
-        "- NO vetar un endpoint por no tener autenticación si su único propósito es devolver el status del servicio o la versión de la aplicación.\n"
-        "- La falta de esquemas Pydantic o el hardcoding de metadata simple se clasifica como 'LOW' o 'MEDIUM' (aprobado con recomendaciones, score 7-8/10), NUNCA como causal de veto.\n\n"
+        "- Endpoints operativos e informativos como '/health', '/status', '/version', '/ping' o '/info' son PÚBLICOS por estándar de la industria.\n"
+        "- NO vetar un endpoint por no tener autenticación si su único propósito es devolver el status o versión.\n"
+        "- La falta de esquemas Pydantic o el hardcoding de metadata simple se clasifica como 'LOW' o 'MEDIUM' (score 7-8/10), NUNCA como causal de veto.\n\n"
         "FORMATO JSON OBLIGATORIO:\n"
         "{\n"
         '  "approved": true,\n'
@@ -408,7 +415,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
             qa_input,
             "QA_DEVSECOPS",
             MODELS_CATALOG["STANDARD"],
-            max_output_tokens=1500
+            max_output_tokens=1500,
         )
         score = audit.get("security_score", 10)
         approved = audit.get("approved", True)
@@ -421,7 +428,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
             "security_score": score,
             "approved": approved,
             "verdict_summary": verdict,
-            "findings": findings
+            "findings": findings,
         }
         security_file.write_text(json.dumps(audit_report, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -430,7 +437,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
             "approved": approved,
             "verdict": verdict,
             "findings": findings,
-            "task": task
+            "task": task,
         }
 
         if not approved:
@@ -440,7 +447,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         await manager.broadcast("AGENT_SUCCESS", "QA_DEVSECOPS", f"Auditoría aprobada ({score}/10): {verdict}", audit_payload)
 
     except Exception as e:
-        await manager.broadcast("AGENT_LOG", "QA_DEVSECOPS", f"Auditoría omitida ({str(e)})")
+        await manager.broadcast("AGENT_LOG", "QA_DEVSECOPS", f"Auditoría omitida ({e!s})")
 
     # 4. Senior Coder
     await manager.broadcast("AGENT_STATUS", "SENIOR_CODER", f"Escribiendo {len(files)} archivo(s) en disco...", {"status": "WORKING"})
@@ -474,6 +481,7 @@ async def execute_pipeline_async(target_dir: Path, task: str):
     await manager.broadcast("AGENT_SUCCESS", "DEVOPS", "PROJECT_MEMORY.md sincronizado", {})
     await manager.broadcast("PIPELINE_COMPLETE", "ORCHESTRATOR", "Ciclo de ejecución completado exitosamente", {"project": target_dir.name})
 
+
 app = FastAPI(title="AI Office - Backend Core")
 
 app.add_middleware(
@@ -484,18 +492,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class RunTaskRequest(BaseModel):
     project_name: str
     prompt: str
 
+
 class CreateProjectRequest(BaseModel):
     name: str
+
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
     if INDEX_HTML.exists():
         return INDEX_HTML.read_text(encoding="utf-8")
     return "<h2>Dashboard no encontrado. Genera web/index.html primero.</h2>"
+
 
 @app.websocket("/ws/office")
 async def websocket_endpoint(websocket: WebSocket):
@@ -505,12 +517,13 @@ async def websocket_endpoint(websocket: WebSocket):
             "timestamp": time.strftime("%H:%M:%S"),
             "event_type": "CONNECTED",
             "agent": "SYSTEM",
-            "message": "Conectado al Event Bus de AI Office"
+            "message": "Conectado al Event Bus de AI Office",
         })
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
 
 @app.get("/api/projects")
 def list_projects():
@@ -525,9 +538,10 @@ def list_projects():
                 "path": str(item),
                 "has_memory": has_memory,
                 "has_security": has_security,
-                "file_count": file_count
+                "file_count": file_count,
             })
     return {"projects": projects}
+
 
 @app.post("/api/projects")
 def create_project(req: CreateProjectRequest):
@@ -538,6 +552,7 @@ def create_project(req: CreateProjectRequest):
     target.mkdir(parents=True, exist_ok=True)
     return {"status": "created", "name": safe_name, "path": str(target)}
 
+
 @app.get("/api/projects/{name}/memory")
 def get_project_memory(name: str):
     target = DEFAULT_PROJECTS_DIR / name
@@ -545,6 +560,7 @@ def get_project_memory(name: str):
     if not memory_file.exists():
         return {"memory": "*Sin historial previo registrado en PROJECT_MEMORY.md.*"}
     return {"memory": memory_file.read_text(encoding="utf-8")}
+
 
 @app.get("/api/projects/{name}/security")
 def get_project_security(name: str):
@@ -558,12 +574,13 @@ def get_project_security(name: str):
     except Exception as e:
         return {"has_audit": False, "error": str(e)}
 
+
 @app.get("/api/projects/{name}/files")
 def list_project_files(name: str):
     target = DEFAULT_PROJECTS_DIR / name
     if not target.exists():
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
-    
+
     files_list = []
     for p in sorted(target.rglob("*")):
         if p.is_file() and not p.name.endswith(".bak") and not p.name.startswith("."):
@@ -573,27 +590,29 @@ def list_project_files(name: str):
                 "name": p.name,
                 "size_bytes": p.stat().st_size,
                 "is_memory": p.name == "PROJECT_MEMORY.md",
-                "is_security": p.name == "SECURITY_AUDIT.json"
+                "is_security": p.name == "SECURITY_AUDIT.json",
             })
     return {"project": name, "files": files_list}
+
 
 @app.get("/api/projects/{name}/file")
 def get_single_file_content(name: str, path: str):
     target = DEFAULT_PROJECTS_DIR / name
     clean_path = Path(path).as_posix().lstrip("/\\")
     resolved = (target / clean_path).resolve()
-    
+
     if not str(resolved).startswith(str(target.resolve())):
         raise HTTPException(status_code=403, detail="Acceso denegado fuera del directorio del proyecto")
-    
+
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    
+
     try:
         content = resolved.read_text(encoding="utf-8")
         return {"path": clean_path, "content": content}
     except Exception as e:
-        return {"path": clean_path, "content": f"<Error archivo: decodificando {str(e)}>"}
+        return {"path": clean_path, "content": f"<Error archivo: decodificando {e!s}>"}
+
 
 @app.post("/api/run")
 async def run_task(req: RunTaskRequest):
@@ -604,15 +623,19 @@ async def run_task(req: RunTaskRequest):
     asyncio.create_task(execute_pipeline_async(target_dir, req.prompt))
     return {"status": "started", "project": req.project_name, "prompt": req.prompt}
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Office Server")
+    # Default seguro para desarrollo local (evita B104 en Bandit). Docker pasa --host 0.0.0.0
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host del servidor (0.0.0.0 en Docker)")
     parser.add_argument("--port", type=int, default=8000, help="Puerto del servidor")
     args = parser.parse_args()
 
     print("\n========================================================")
-    print(f"[*] Dashboard disponible en: [http://127.0.0.1](http://127.0.0.1):{args.port}")
-    print(f"[*] WebSocket activo en:    ws://127.0.0.1:{args.port}/ws/office")
+    print(f"[*] Dashboard disponible en: http://{args.host}:{args.port}")
+    print(f"[*] WebSocket activo en:    ws://{args.host}:{args.port}/ws/office")
     print(f"[*] Proyectos en:           {DEFAULT_PROJECTS_DIR}")
     print("========================================================\n")
 
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+

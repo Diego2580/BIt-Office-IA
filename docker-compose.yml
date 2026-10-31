@@ -1,0 +1,15 @@
+services:
+  ai-office:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-office-app
+    ports:
+      - "8080:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./proyectos:/app/proyectos
+    restart: unless-stopped
