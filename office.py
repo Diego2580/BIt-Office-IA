@@ -109,14 +109,40 @@ def classify_task_complexity(task: str, existing_files_count: int) -> dict:
     words_count = len(task.split())
 
     heavy_keywords = [
-        "arquitectura", "refactor", "patron", "microservicio", "rediseña",
-        "concurrencia", "asincrono complejo", "inyeccion de dependencias", "escalabilidad",
-        "migra", "seguridad avanzada", "oauth", "jwt completo", "multitenant", "database",
+        "arquitectura",
+        "refactor",
+        "patron",
+        "microservicio",
+        "rediseña",
+        "concurrencia",
+        "asincrono complejo",
+        "inyeccion de dependencias",
+        "escalabilidad",
+        "migra",
+        "seguridad avanzada",
+        "oauth",
+        "jwt completo",
+        "multitenant",
+        "database",
     ]
     light_keywords = [
-        "agrega un campo", "docstring", "corrige", "cambia el puerto",
-        "imprime", "variable", "status", "health", "renombra", "comentario",
-        "formato", "version", "tipo", "tipado", "endpoint simple", "ajusta", "info",
+        "agrega un campo",
+        "docstring",
+        "corrige",
+        "cambia el puerto",
+        "imprime",
+        "variable",
+        "status",
+        "health",
+        "renombra",
+        "comentario",
+        "formato",
+        "version",
+        "tipo",
+        "tipado",
+        "endpoint simple",
+        "ajusta",
+        "info",
     ]
 
     is_heavy = any(kw in task_lower for kw in heavy_keywords) or words_count > 45 or existing_files_count > 15
@@ -154,9 +180,11 @@ async def call_gemini_with_telemetry(
     max_output_tokens: int = 4096,
 ) -> dict:
     payload = {
-        "contents": [{
-            "parts": [{"text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"}],
-        }],
+        "contents": [
+            {
+                "parts": [{"text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"}],
+            }
+        ],
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.1,
@@ -247,7 +275,9 @@ async def call_gemini_with_telemetry(
 
         except Exception as e:
             last_error = str(e)
-            await manager.broadcast("AGENT_LOG", agent_name, f"Incidencia con '{model}': {e!s}. Probando alternativa...")
+            await manager.broadcast(
+                "AGENT_LOG", agent_name, f"Incidencia con '{model}': {e!s}. Probando alternativa..."
+            )
             continue
 
         finally:
@@ -348,7 +378,9 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         '  "memory_update": "Resumen para el log"\n'
         "}"
     )
-    leader_input = f"MEMORIA TÉCNICA:\n{memory_context}\n\nARCHIVOS DEL PROYECTO:\n{files_context}\n\nREQUERIMIENTO:\n{task}"
+    leader_input = (
+        f"MEMORIA TÉCNICA:\n{memory_context}\n\nARCHIVOS DEL PROYECTO:\n{files_context}\n\nREQUERIMIENTO:\n{task}"
+    )
 
     try:
         plan_data = await call_gemini_with_telemetry(
@@ -365,18 +397,26 @@ async def execute_pipeline_async(target_dir: Path, task: str):
 
     plan_desc = plan_data.get("plan", "Sin plan declarado")
     files = plan_data.get("files_to_modify", [])
-    await manager.broadcast("AGENT_SUCCESS", "TECH_LEAD", f"Plan aprobado: {plan_desc}", {"plan": plan_desc, "files_count": len(files)})
+    await manager.broadcast(
+        "AGENT_SUCCESS", "TECH_LEAD", f"Plan aprobado: {plan_desc}", {"plan": plan_desc, "files_count": len(files)}
+    )
 
     # 2. QA Local
-    await manager.broadcast("AGENT_STATUS", "QA_LOCAL", "Validando compilación y sintaxis en memoria...", {"status": "WORKING"})
+    await manager.broadcast(
+        "AGENT_STATUS", "QA_LOCAL", "Validando compilación y sintaxis en memoria...", {"status": "WORKING"}
+    )
     is_valid, syntax_errors = validate_python_syntax(files)
     if not is_valid:
         await manager.broadcast("AGENT_FAILED", "QA_LOCAL", "Errores de sintaxis detectados", {"errors": syntax_errors})
         return
-    await manager.broadcast("AGENT_SUCCESS", "QA_LOCAL", "Sintaxis verificada (0 errores de compilación)", {"status": "APPROVED"})
+    await manager.broadcast(
+        "AGENT_SUCCESS", "QA_LOCAL", "Sintaxis verificada (0 errores de compilación)", {"status": "APPROVED"}
+    )
 
     # 3. QA DevSecOps
-    await manager.broadcast("AGENT_STATUS", "QA_DEVSECOPS", "Auditando vulnerabilidades y estándares OWASP...", {"status": "THINKING"})
+    await manager.broadcast(
+        "AGENT_STATUS", "QA_DEVSECOPS", "Auditando vulnerabilidades y estándares OWASP...", {"status": "THINKING"}
+    )
     devsecops_system = (
         "ACTÚA COMO: Principal Security Architect & Lead DevSecOps Auditor.\n"
         "MISIÓN: Vetar código únicamente ante riesgos de seguridad reales y severos.\n\n"
@@ -441,16 +481,22 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         }
 
         if not approved:
-            await manager.broadcast("AGENT_FAILED", "QA_DEVSECOPS", f"Código vetado por seguridad ({score}/10): {verdict}", audit_payload)
+            await manager.broadcast(
+                "AGENT_FAILED", "QA_DEVSECOPS", f"Código vetado por seguridad ({score}/10): {verdict}", audit_payload
+            )
             return
 
-        await manager.broadcast("AGENT_SUCCESS", "QA_DEVSECOPS", f"Auditoría aprobada ({score}/10): {verdict}", audit_payload)
+        await manager.broadcast(
+            "AGENT_SUCCESS", "QA_DEVSECOPS", f"Auditoría aprobada ({score}/10): {verdict}", audit_payload
+        )
 
     except Exception as e:
         await manager.broadcast("AGENT_LOG", "QA_DEVSECOPS", f"Auditoría omitida ({e!s})")
 
     # 4. Senior Coder
-    await manager.broadcast("AGENT_STATUS", "SENIOR_CODER", f"Escribiendo {len(files)} archivo(s) en disco...", {"status": "WORKING"})
+    await manager.broadcast(
+        "AGENT_STATUS", "SENIOR_CODER", f"Escribiendo {len(files)} archivo(s) en disco...", {"status": "WORKING"}
+    )
     for item in files:
         rel_path = item["relative_path"]
         file_path = target_dir / rel_path
@@ -463,7 +509,12 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         file_path.write_text(item["content"], encoding="utf-8")
         await manager.broadcast("AGENT_LOG", "SENIOR_CODER", f"Archivo generado: {rel_path}")
 
-    await manager.broadcast("AGENT_SUCCESS", "SENIOR_CODER", "Archivos actualizados correctamente", {"modified": [f["relative_path"] for f in files]})
+    await manager.broadcast(
+        "AGENT_SUCCESS",
+        "SENIOR_CODER",
+        "Archivos actualizados correctamente",
+        {"modified": [f["relative_path"] for f in files]},
+    )
 
     # 5. DevOps Scribe
     await manager.broadcast("AGENT_STATUS", "DEVOPS", "Actualizando memoria persistente...", {"status": "WORKING"})
@@ -479,7 +530,9 @@ async def execute_pipeline_async(target_dir: Path, task: str):
         f.write(memory_entry)
 
     await manager.broadcast("AGENT_SUCCESS", "DEVOPS", "PROJECT_MEMORY.md sincronizado", {})
-    await manager.broadcast("PIPELINE_COMPLETE", "ORCHESTRATOR", "Ciclo de ejecución completado exitosamente", {"project": target_dir.name})
+    await manager.broadcast(
+        "PIPELINE_COMPLETE", "ORCHESTRATOR", "Ciclo de ejecución completado exitosamente", {"project": target_dir.name}
+    )
 
 
 app = FastAPI(title="AI Office - Backend Core")
@@ -513,12 +566,14 @@ def serve_dashboard():
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
-        await websocket.send_json({
-            "timestamp": time.strftime("%H:%M:%S"),
-            "event_type": "CONNECTED",
-            "agent": "SYSTEM",
-            "message": "Conectado al Event Bus de AI Office",
-        })
+        await websocket.send_json(
+            {
+                "timestamp": time.strftime("%H:%M:%S"),
+                "event_type": "CONNECTED",
+                "agent": "SYSTEM",
+                "message": "Conectado al Event Bus de AI Office",
+            }
+        )
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
@@ -533,13 +588,15 @@ def list_projects():
             has_memory = (item / "PROJECT_MEMORY.md").exists()
             has_security = (item / "SECURITY_AUDIT.json").exists()
             file_count = len([f for f in item.rglob("*") if f.is_file()])
-            projects.append({
-                "name": item.name,
-                "path": str(item),
-                "has_memory": has_memory,
-                "has_security": has_security,
-                "file_count": file_count,
-            })
+            projects.append(
+                {
+                    "name": item.name,
+                    "path": str(item),
+                    "has_memory": has_memory,
+                    "has_security": has_security,
+                    "file_count": file_count,
+                }
+            )
     return {"projects": projects}
 
 
@@ -585,13 +642,15 @@ def list_project_files(name: str):
     for p in sorted(target.rglob("*")):
         if p.is_file() and not p.name.endswith(".bak") and not p.name.startswith("."):
             rel = p.relative_to(target).as_posix()
-            files_list.append({
-                "path": rel,
-                "name": p.name,
-                "size_bytes": p.stat().st_size,
-                "is_memory": p.name == "PROJECT_MEMORY.md",
-                "is_security": p.name == "SECURITY_AUDIT.json",
-            })
+            files_list.append(
+                {
+                    "path": rel,
+                    "name": p.name,
+                    "size_bytes": p.stat().st_size,
+                    "is_memory": p.name == "PROJECT_MEMORY.md",
+                    "is_security": p.name == "SECURITY_AUDIT.json",
+                }
+            )
     return {"project": name, "files": files_list}
 
 
@@ -638,4 +697,3 @@ if __name__ == "__main__":
     print("========================================================\n")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-
