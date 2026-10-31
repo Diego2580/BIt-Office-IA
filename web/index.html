@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Office — Mission Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(17, 24, 39, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --info: #06b6d4;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      background-image: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 60%);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 0.85rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      backdrop-filter: blur(12px);
+      background: rgba(9, 13, 22, 0.8);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo-container { display: flex; align-items: center; gap: 0.75rem; }
+    .logo-badge {
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      padding: 0.4rem 0.75rem;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.85rem;
+      letter-spacing: 0.05em;
+    }
+    .logo-title { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; }
+    .ws-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.8rem;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+    }
+    .ws-indicator {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--danger); transition: background 0.3s;
+    }
+    .ws-connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
+
+    main {
+      flex: 1;
+      padding: 1.5rem 2rem;
+      max-width: 1750px;
+      width: 100%;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 460px;
+      gap: 1.5rem;
+    }
+    @media (max-width: 1200px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .left-col {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* COMMAND BAR */
+    .command-bar {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      backdrop-filter: blur(12px);
+    }
+    .controls-row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    select, input, textarea {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 0.6rem 0.9rem;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    select:focus, input:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+    select { min-width: 220px; cursor: pointer; }
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.1rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:active { transform: scale(0.98); }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+    .prompt-row { display: flex; gap: 0.75rem; }
+    textarea { flex: 1; resize: vertical; min-height: 52px; max-height: 140px; }
+    .btn-send {
+      padding: 0 1.5rem;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      white-space: nowrap;
+    }
+    .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* AGENT GRID */
+    .agent-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.85rem;
+    }
+    .agent-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      position: relative;
+      overflow: hidden;
+      backdrop-filter: blur(8px);
+    }
+    .agent-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 3px;
+      background: transparent;
+      transition: background 0.3s;
+    }
+    .agent-card.status-THINKING { border-color: var(--accent); }
+    .agent-card.status-THINKING::before { background: var(--accent); animation: pulse 1.5s infinite; }
+    .agent-card.status-WORKING { border-color: var(--warning); }
+    .agent-card.status-WORKING::before { background: var(--warning); animation: pulse 1.5s infinite; }
+    .agent-card.status-SUCCESS { border-color: var(--success); }
+    .agent-card.status-SUCCESS::before { background: var(--success); }
+    .agent-card.status-ERROR { border-color: var(--danger); }
+    .agent-card.status-ERROR::before { background: var(--danger); }
+
+    .agent-header { display: flex; align-items: center; justify-content: space-between; }
+    .agent-identity { display: flex; align-items: center; gap: 0.5rem; }
+    .agent-avatar {
+      font-size: 1.25rem; width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255, 255, 255, 0.05); border-radius: 8px;
+    }
+    .agent-name { font-weight: 600; font-size: 0.88rem; }
+    .agent-role { font-size: 0.72rem; color: var(--text-muted); }
+    .agent-pill {
+      font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+      padding: 0.2rem 0.45rem; border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06); color: var(--text-muted);
+    }
+    .status-THINKING .agent-pill { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+    .status-WORKING .agent-pill { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .status-SUCCESS .agent-pill { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .status-ERROR .agent-pill { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .agent-desc {
+      font-size: 0.76rem; color: var(--text-muted);
+      min-height: 2.1rem; line-height: 1.35; word-break: break-word;
+    }
+
+    /* TERMINAL */
+    .terminal-container {
+      flex: 1; min-height: 340px;
+      background: #060911; border: 1px solid var(--border);
+      border-radius: 16px; display: flex; flex-direction: column;
+      overflow: hidden; font-family: 'Fira Code', monospace;
+    }
+    .terminal-header {
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border);
+      padding: 0.5rem 1rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .window-dots { display: flex; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+    .terminal-title { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; }
+    .terminal-body {
+      flex: 1; padding: 0.85rem 1rem; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 0.35rem;
+      font-size: 0.82rem; line-height: 1.45;
+    }
+    .terminal-line { display: flex; gap: 0.65rem; align-items: flex-start; }
+    .log-time { color: #64748b; font-size: 0.72rem; min-width: 58px; user-select: none; }
+    .log-badge {
+      font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 600; white-space: nowrap;
+    }
+    .badge-ORCHESTRATOR { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+    .badge-TECH_LEAD { background: rgba(99, 102, 241, 0.25); color: #a5b4fc; }
+    .badge-QA_LOCAL { background: rgba(6, 182, 212, 0.25); color: #67e8f9; }
+    .badge-QA_DEVSECOPS { background: rgba(244, 63, 94, 0.25); color: #fda4af; }
+    .badge-SENIOR_CODER { background: rgba(245, 158, 11, 0.25); color: #fde68a; }
+    .badge-DEVOPS { background: rgba(16, 185, 129, 0.25); color: #86efac; }
+    .badge-SYSTEM { background: rgba(255, 255, 255, 0.1); color: #e2e8f0; }
+    .log-msg { color: #e2e8f0; flex: 1; word-break: break-word; }
+    .log-msg.error { color: #f87171; font-weight: 500; }
+    .log-msg.success { color: #4ade80; font-weight: 500; }
+
+    /* PANEL DERECHO: INSPECTOR */
+    .inspector-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+      max-height: calc(100vh - 120px);
+      position: sticky;
+      top: 5rem;
+    }
+    .inspector-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.25);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 0.75rem 0.5rem;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      white-space: nowrap;
+    }
+    .tab-btn.active {
+      color: #fff;
+      border-bottom: 2px solid var(--accent);
+      background: rgba(99, 102, 241, 0.08);
+    }
+    .tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.1rem;
+      display: none;
+    }
+    .tab-content.active { display: block; }
+
+    /* MARKDOWN STYLES */
+    .markdown-body { font-size: 0.85rem; line-height: 1.6; color: #d1d5db; }
+    .markdown-body h2 {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3rem; font-size: 1.05rem; color: #a5b4fc;
+      margin-top: 1rem; margin-bottom: 0.5rem;
+    }
+    .markdown-body ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+    .markdown-body code {
+      background: rgba(0, 0, 0, 0.4); padding: 0.15rem 0.35rem;
+      border-radius: 4px; font-family: 'Fira Code', monospace;
+      font-size: 0.78rem; color: #fbbf24;
+    }
+
+    /* FILE TREE */
+    .file-tree { display: flex; flex-direction: column; gap: 0.35rem; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.5rem 0.75rem; border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02); border: 1px solid transparent;
+      cursor: pointer; transition: all 0.2s; font-size: 0.82rem; font-family: 'Fira Code', monospace;
+    }
+    .file-item:hover {
+      background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3);
+    }
+    .file-left { display: flex; align-items: center; gap: 0.5rem; }
+    .file-size { font-size: 0.72rem; color: #64748b; }
+    .badge-memory-file {
+      font-size: 0.65rem; background: rgba(16, 185, 129, 0.2); color: #34d399;
+      padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 600;
+    }
+    .badge-sec-file {
+      font-size: 0.65rem; background: rgba(244, 63, 94, 0.2); color: #fda4af;
+      padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 600;
+    }
+
+    /* ESTILOS ISSUE #4: DEVSECOPS PANEL */
+    .sec-card {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .sec-score-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .sec-score-circle {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 76px;
+      height: 76px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.03);
+      border: 3px solid var(--success);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
+      transition: all 0.3s;
+    }
+    .sec-score-circle.score-high {
+      border-color: var(--success);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.25);
+    }
+    .sec-score-circle.score-med {
+      border-color: var(--warning);
+      box-shadow: 0 0 15px rgba(245, 158, 11, 0.25);
+    }
+    .sec-score-circle.score-low {
+      border-color: var(--danger);
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+    }
+    .sec-score-val {
+      font-size: 1.6rem;
+      font-weight: 800;
+      line-height: 1;
+      font-family: 'Fira Code', monospace;
+    }
+    .sec-score-max { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; }
+    
+    .sec-status-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.3rem 0.75rem;
+      border-radius: 8px;
+    }
+    .badge-approved { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-vetoed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .sec-summary-text {
+      font-size: 0.84rem;
+      line-height: 1.45;
+      color: #e2e8f0;
+    }
+
+    /* CONTADORES OWASP */
+    .owasp-counters {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.4rem;
+    }
+    .owasp-pill {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0.5rem 0.25rem;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+    }
+    .owasp-pill-count {
+      font-size: 1.1rem;
+      font-weight: 700;
+      font-family: 'Fira Code', monospace;
+    }
+    .owasp-pill-label {
+      font-size: 0.62rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-top: 0.2rem;
+    }
+    .pill-critical { color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+    .pill-high { color: #fb923c; border-color: rgba(251, 146, 60, 0.3); }
+    .pill-med { color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
+    .pill-low { color: #60a5fa; border-color: rgba(96, 165, 250, 0.3); }
+
+    /* LISTA DE HALLAZGOS */
+    .findings-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      margin-top: 0.5rem;
+    }
+    .finding-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-left: 3px solid #64748b;
+      border-radius: 8px;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .finding-item.sev-CRITICAL { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.04); }
+    .finding-item.sev-HIGH { border-left-color: #f97316; background: rgba(249, 115, 22, 0.04); }
+    .finding-item.sev-MEDIUM { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.04); }
+    .finding-item.sev-LOW { border-left-color: #3b82f6; background: rgba(59, 130, 246, 0.04); }
+
+    .finding-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .finding-file {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.75rem;
+      color: #93c5fd;
+      word-break: break-all;
+    }
+    .finding-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-CRITICAL { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .badge-HIGH { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
+    .badge-MEDIUM { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+    .badge-LOW { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+    .finding-desc {
+      font-size: 0.8rem;
+      color: #d1d5db;
+      line-height: 1.4;
+    }
+
+    /* MODAL CODE VIEWER */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(4px); display: none; align-items: center;
+      justify-content: center; z-index: 200;
+    }
+    .modal {
+      background: #111827; border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.5rem; width: 100%;
+      max-width: 440px; display: flex; flex-direction: column; gap: 1rem;
+    }
+    .code-modal { max-width: 800px; height: 80vh; }
+    .code-modal pre {
+      flex: 1; background: #060911; border: 1px solid var(--border);
+      border-radius: 10px; padding: 1rem; overflow: auto;
+      font-family: 'Fira Code', monospace; font-size: 0.82rem; color: #e2e8f0;
+    }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo-container">
+      <div class="logo-badge">AI OFFICE</div>
+      <div class="logo-title">Mission Control Center</div>
+    </div>
+    <div class="ws-badge">
+      <div class="ws-indicator" id="wsIndicator"></div>
+      <span id="wsStatusText">Desconectado</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- COLUMNA IZQUIERDA -->
+    <div class="left-col">
+      <section class="command-bar">
+        <div class="controls-row">
+          <label for="projectSelect" style="font-size:0.82rem; color:var(--text-muted); font-weight:600;">Proyecto:</label>
+          <select id="projectSelect" onchange="onProjectChange()">
+            <option value="" disabled selected>Cargando proyectos...</option>
+          </select>
+          <button class="btn btn-secondary" onclick="openNewProjectModal()">+ Nuevo Proyecto</button>
+          <button class="btn btn-secondary" onclick="refreshActiveProjectData()" title="Refrescar datos">↻ Sincronizar</button>
+        </div>
+
+        <div class="prompt-row">
+          <textarea id="taskPrompt" placeholder="Instrucción técnica para la oficina... (ej: Crea un endpoint /files/secure con validación estricta de rutas)"></textarea>
+          <button class="btn btn-send" id="btnDispatch" onclick="dispatchTask()">
+            <span id="btnText">Despachar Tarea</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- AGENT GRID -->
+      <section class="agent-grid">
+        <div class="agent-card" id="card-TECH_LEAD">
+          <div class="agent-header">
+            <div class="agent-identity">
+              <div class="agent-avatar">🧠</div>
+              <div><div class="agent-name">Tech Lead</div><div class="agent-role">Gemini 3.8</div></div>
+            </div>
+            <span class="agent-pill" id="pill-TECH_LEAD">IDLE</span>
+          </div>
+          <div class="agent-desc" id="desc-TECH_LEAD">En espera de requerimientos de arquitectura...</div>
+        </div>
+
+        <div class="agent-card" id="card-QA_LOCAL">
+          <div class="agent-header">
+            <div class="agent-identity">
+              <div class="agent-avatar">⚡</div>
+              <div><div class="agent-name">QA Sintaxis</div><div class="agent-role">AST Compiler</div></div>
+            </div>
+            <span class="agent-pill" id="pill-QA_LOCAL">IDLE</span>
+          </div>
+          <div class="agent-desc" id="desc-QA_LOCAL">Listo para compilar código en memoria.</div>
+        </div>
+
+        <div class="agent-card" id="card-QA_DEVSECOPS">
+          <div class="agent-header">
+            <div class="agent-identity">
+              <div class="agent-avatar">🔒</div>
+              <div><div class="agent-name">DevSecOps</div><div class="agent-role">OWASP Auditor</div></div>
+            </div>
+            <span class="agent-pill" id="pill-QA_DEVSECOPS">IDLE</span>
+          </div>
+          <div class="agent-desc" id="desc-QA_DEVSECOPS">Listo para auditar vulnerabilidades y OWASP.</div>
+        </div>
+
+        <div class="agent-card" id="card-SENIOR_CODER">
+          <div class="agent-header">
+            <div class="agent-identity">
+              <div class="agent-avatar">🛠️</div>
+              <div><div class="agent-name">Senior Coder</div><div class="agent-role">Filesystem Engine</div></div>
+            </div>
+            <span class="agent-pill" id="pill-SENIOR_CODER">IDLE</span>
+          </div>
+          <div class="agent-desc" id="desc-SENIOR_CODER">Listo para aplicar cambios y crear respaldos .bak.</div>
+        </div>
+
+        <div class="agent-card" id="card-DEVOPS">
+          <div class="agent-header">
+            <div class="agent-identity">
+              <div class="agent-avatar">📦</div>
+              <div><div class="agent-name">DevOps Scribe</div><div class="agent-role">Memory Log</div></div>
+            </div>
+            <span class="agent-pill" id="pill-DEVOPS">IDLE</span>
+          </div>
+          <div class="agent-desc" id="desc-DEVOPS">Listo para sincronizar el historial persistente.</div>
+        </div>
+      </section>
+
+      <!-- TERMINAL STREAM -->
+      <section class="terminal-container">
+        <div class="terminal-header">
+          <div class="window-dots">
+            <div class="dot dot-red"></div>
+            <div class="dot dot-yellow"></div>
+            <div class="dot dot-green"></div>
+          </div>
+          <div class="terminal-title">Live Pipeline Stream</div>
+          <button class="btn btn-secondary" style="padding:0.2rem 0.5rem; font-size:0.72rem;" onclick="clearTerminal()">Limpiar</button>
+        </div>
+        <div class="terminal-body" id="terminalBody">
+          <div class="terminal-line">
+            <span class="log-time">--:--:--</span>
+            <span class="log-badge badge-SYSTEM">SYSTEM</span>
+            <span class="log-msg">AI Office Telemetry Bus inicializado.</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- COLUMNA DERECHA: INSPECTOR CON TABS (ISSUE #3 Y #4) -->
+    <aside class="inspector-panel">
+      <div class="inspector-tabs">
+        <button class="tab-btn active" id="tabBtnSecurity" onclick="switchTab('security')">
+          <span>🛡️</span> DevSecOps (<span id="tabSecScoreBadge">--</span>)
+        </button>
+        <button class="tab-btn" id="tabBtnMemory" onclick="switchTab('memory')">
+          <span>📜</span> Memoria
+        </button>
+        <button class="tab-btn" id="tabBtnFiles" onclick="switchTab('files')">
+          <span>📁</span> Archivos (<span id="filesCountBadge">0</span>)
+        </button>
+      </div>
+
+      <!-- TAB 1: DEVSECOPS SECURITY PANEL (ISSUE #4) -->
+      <div class="tab-content active" id="tabSecurity">
+        <div id="secReportContainer">
+          <div class="sec-card" style="text-align:center; padding:2rem 1rem;">
+            <p style="color:#64748b; font-size:0.85rem;">No hay auditorías registradas en el proyecto activo.</p>
+            <p style="color:#475569; font-size:0.75rem; margin-top:0.4rem;">Despacha una tarea para que DevSecOps evalúe el código contra estándares OWASP.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: MEMORIA PERSISTENTE -->
+      <div class="tab-content" id="tabMemory">
+        <div id="memoryMarkdownContainer" class="markdown-body">
+          <p style="color:#64748b;">Cargando bitácora persistente del proyecto...</p>
+        </div>
+      </div>
+
+      <!-- TAB 3: EXPLORADOR DE ARCHIVOS -->
+      <div class="tab-content" id="tabFiles">
+        <div class="file-tree" id="fileTreeContainer">
+          <p style="color:#64748b; font-size:0.8rem;">Cargando árbol de archivos...</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- MODAL: NUEVO PROYECTO -->
+  <div class="modal-overlay" id="newProjectModal">
+    <div class="modal">
+      <div style="font-size:1.1rem; font-weight:700;">Crear Nuevo Proyecto</div>
+      <input type="text" id="newProjectName" placeholder="Nombre (ej: payment_gateway)">
+      <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+        <button class="btn btn-secondary" onclick="closeNewProjectModal()">Cancelar</button>
+        <button class="btn" onclick="submitCreateProject()">Crear Proyecto</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VISOR DE CÓDIGO -->
+  <div class="modal-overlay" id="codeViewerModal">
+    <div class="modal code-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-family:'Fira Code', monospace; font-size:0.88rem; font-weight:600;" id="codeModalTitle">archivo.py</span>
+        <button class="btn btn-secondary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="closeCodeModal()">Cerrar</button>
+      </div>
+      <pre><code id="codeModalBody"></code></pre>
+    </div>
+  </div>
+
+  <script>
+    const AGENTS = ["TECH_LEAD", "QA_LOCAL", "QA_DEVSECOPS", "SENIOR_CODER", "DEVOPS"];
+    let ws = null;
+    let isRunning = false;
+
+    window.addEventListener("DOMContentLoaded", async () => {
+      initWebSocket();
+      await loadProjects();
+      await refreshActiveProjectData();
+    });
+
+    // WEBSOCKET
+    function initWebSocket() {
+      const loc = window.location;
+      const wsUrl = `ws://${loc.host}/ws/office`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        document.getElementById("wsIndicator").classList.add("ws-connected");
+        document.getElementById("wsStatusText").textContent = "Conectado";
+        appendLog("SYSTEM", "Conectado al bus de telemetría por WebSocket.");
+      };
+
+      ws.onclose = () => {
+        document.getElementById("wsIndicator").classList.remove("ws-connected");
+        document.getElementById("wsStatusText").textContent = "Reconectando...";
+        setTimeout(initWebSocket, 2500);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleEvent(data);
+        } catch (err) {
+          console.error("Mensaje WS corrupto:", event.data);
+        }
+      };
+    }
+
+    // MANEJO DE EVENTOS EN TIEMPO REAL
+    function handleEvent(data) {
+      const { timestamp, event_type, agent, message, payload } = data;
+
+      let msgClass = "";
+      if (event_type === "AGENT_FAILED") msgClass = "error";
+      if (event_type === "AGENT_SUCCESS" || event_type === "PIPELINE_COMPLETE") msgClass = "success";
+      appendLog(agent || "SYSTEM", message, timestamp, msgClass);
+
+      if (agent && AGENTS.includes(agent)) {
+        const card = document.getElementById(`card-${agent}`);
+        const pill = document.getElementById(`pill-${agent}`);
+        const desc = document.getElementById(`desc-${agent}`);
+
+        if (desc) desc.textContent = message;
+        card.classList.remove("status-THINKING", "status-WORKING", "status-SUCCESS", "status-ERROR");
+
+        if (event_type === "AGENT_STATUS") {
+          const status = payload?.status || "WORKING";
+          card.classList.add(`status-${status}`);
+          pill.textContent = status;
+        } else if (event_type === "AGENT_SUCCESS") {
+          card.classList.add("status-SUCCESS");
+          pill.textContent = "DONE";
+        } else if (event_type === "AGENT_FAILED") {
+          card.classList.add("status-ERROR");
+          pill.textContent = "FAILED";
+        }
+      }
+
+      // Actualización reactiva del panel DevSecOps (Issue #4)
+      if (agent === "QA_DEVSECOPS" && (event_type === "AGENT_SUCCESS" || event_type === "AGENT_FAILED")) {
+        if (payload && payload.score !== undefined) {
+          renderSecurityAuditCard({
+            security_score: payload.score,
+            approved: payload.approved,
+            verdict_summary: payload.verdict || message,
+            findings: payload.findings || [],
+            timestamp: timestamp
+          });
+          // Si fue vetado, forzar vista a la pestaña de seguridad
+          if (!payload.approved) {
+            switchTab("security");
+          }
+        }
+      }
+
+      // Sincronización al completar ciclo
+      if (event_type === "PIPELINE_COMPLETE" || event_type === "AGENT_FAILED") {
+        setRunningState(false);
+        refreshActiveProjectData();
+      }
+    }
+
+    function appendLog(agent, text, time = null, extraClass = "") {
+      const body = document.getElementById("terminalBody");
+      const line = document.createElement("div");
+      line.className = "terminal-line";
+      const now = time || new Date().toTimeString().split(" ")[0];
+      const badgeClass = `badge-${agent}` || "badge-SYSTEM";
+
+      line.innerHTML = `
+        <span class="log-time">${now}</span>
+        <span class="log-badge ${badgeClass}">${agent}</span>
+        <span class="log-msg ${extraClass}">${escapeHtml(text)}</span>
+      `;
+      body.appendChild(line);
+      body.scrollTop = body.scrollHeight;
+    }
+
+    function clearTerminal() {
+      document.getElementById("terminalBody").innerHTML = "";
+    }
+
+    // CARGAR Y SINCRONIZAR PROYECTO
+    async function loadProjects() {
+      const select = document.getElementById("projectSelect");
+      try {
+        const res = await fetch("/api/projects");
+        const data = await res.json();
+        select.innerHTML = "";
+
+        if (!data.projects || data.projects.length === 0) {
+          select.innerHTML = '<option value="" disabled selected>No hay proyectos en ./proyectos</option>';
+          return;
+        }
+
+        data.projects.forEach((p, idx) => {
+          const opt = document.createElement("option");
+          opt.value = p.name;
+          opt.textContent = `${p.name} (${p.file_count} archivos)`;
+          if (idx === 0) opt.selected = true;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        appendLog("SYSTEM", "Error cargando proyectos: " + err.message, null, "error");
+      }
+    }
+
+    function onProjectChange() {
+      refreshActiveProjectData();
+    }
+
+    async function refreshActiveProjectData() {
+      const project = document.getElementById("projectSelect").value;
+      if (!project) return;
+      await Promise.all([
+        loadProjectSecurity(project),
+        loadProjectMemory(project),
+        loadProjectFiles(project)
+      ]);
+    }
+
+    // ISSUE #4: RENDERIZADO DEL PANEL DEVSECOPS
+    async function loadProjectSecurity(project) {
+      const container = document.getElementById("secReportContainer");
+      const tabBadge = document.getElementById("tabSecScoreBadge");
+      try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(project)}/security`);
+        const data = await res.json();
+
+        if (data.has_audit && data.audit) {
+          renderSecurityAuditCard(data.audit);
+        } else {
+          tabBadge.textContent = "--";
+          container.innerHTML = `
+            <div class="sec-card" style="text-align:center; padding:2rem 1rem;">
+              <p style="color:#64748b; font-size:0.85rem;">No hay auditorías registradas para '${escapeHtml(project)}'.</p>
+              <p style="color:#475569; font-size:0.75rem; margin-top:0.4rem;">Despacha una tarea para que DevSecOps evalúe el código contra estándares OWASP.</p>
+            </div>
+          `;
+        }
+      } catch (err) {
+        container.innerHTML = `<p style="color:#ef4444; font-size:0.82rem;">Error cargando auditoría: ${err.message}</p>`;
+      }
+    }
+
+    function renderSecurityAuditCard(audit) {
+      const container = document.getElementById("secReportContainer");
+      const tabBadge = document.getElementById("tabSecScoreBadge");
+      const score = audit.security_score ?? 10;
+      const approved = audit.approved ?? true;
+      const findings = audit.findings || [];
+
+      tabBadge.textContent = `${score}/10`;
+
+      let scoreClass = "score-high";
+      if (score < 5 || !approved) scoreClass = "score-low";
+      else if (score < 8) scoreClass = "score-med";
+
+      // Contadores OWASP
+      const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+      findings.forEach(f => {
+        const s = (f.severity || "LOW").toUpperCase();
+        if (counts[s] !== undefined) counts[s]++;
+      });
+
+      // Render de hallazgos
+      let findingsHtml = "";
+      if (findings.length === 0) {
+        findingsHtml = `
+          <div style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.2); border-radius:8px; padding:0.75rem; font-size:0.8rem; color:#86efac;">
+            ✓ Cero vulnerabilidades OWASP detectadas en la última inspección.
+          </div>
+        `;
+      } else {
+        findingsHtml = findings.map(f => {
+          const sev = (f.severity || "LOW").toUpperCase();
+          return `
+            <div class="finding-item sev-${sev}">
+              <div class="finding-header">
+                <span class="finding-file">${escapeHtml(f.file || "General")}</span>
+                <span class="finding-badge badge-${sev}">${sev}</span>
+              </div>
+              <div class="finding-desc">${escapeHtml(f.issue || "")}</div>
+            </div>
+          `;
+        }).join("");
+      }
+
+      container.innerHTML = `
+        <div class="sec-card">
+          <div class="sec-score-container">
+            <div class="sec-score-circle ${scoreClass}">
+              <span class="sec-score-val">${score}</span>
+              <span class="sec-score-max">/ 10</span>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:0.4rem;">
+              <span class="sec-status-badge ${approved ? 'badge-approved' : 'badge-vetoed'}">
+                ${approved ? '✓ CODIGO APROBADO' : '✗ CODIGO VETADO'}
+              </span>
+              <span style="font-size:0.72rem; color:#64748b;">${escapeHtml(audit.timestamp || 'Reciente')}</span>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; color:#94a3b8; font-weight:600; margin-bottom:0.25rem;">Dictamen del Auditor:</div>
+            <div class="sec-summary-text">${escapeHtml(audit.verdict_summary || "Sin observaciones.")}</div>
+          </div>
+
+          <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; color:#94a3b8; font-weight:600; margin-bottom:0.4rem;">Métricas de Severidad OWASP:</div>
+            <div class="owasp-counters">
+              <div class="owasp-pill pill-critical">
+                <span class="owasp-pill-count">${counts.CRITICAL}</span>
+                <span class="owasp-pill-label">Critical</span>
+              </div>
+              <div class="owasp-pill pill-high">
+                <span class="owasp-pill-count">${counts.HIGH}</span>
+                <span class="owasp-pill-label">High</span>
+              </div>
+              <div class="owasp-pill pill-med">
+                <span class="owasp-pill-count">${counts.MEDIUM}</span>
+                <span class="owasp-pill-label">Medium</span>
+              </div>
+              <div class="owasp-pill pill-low">
+                <span class="owasp-pill-count">${counts.LOW}</span>
+                <span class="owasp-pill-label">Low</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; color:#94a3b8; font-weight:600; margin-bottom:0.4rem;">Hallazgos y Vectores de Riesgo:</div>
+            <div class="findings-list">
+              ${findingsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // MEMORIA Y ARCHIVOS (ISSUE #3)
+    async function loadProjectMemory(project) {
+      const container = document.getElementById("memoryMarkdownContainer");
+      try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(project)}/memory`);
+        const data = await res.json();
+        const rawMd = data.memory || "*Sin memoria registrada.*";
+        container.innerHTML = window.marked ? marked.parse(rawMd) : `<pre>${escapeHtml(rawMd)}</pre>`;
+      } catch (err) {
+        container.innerHTML = `<p style="color:#ef4444;">Error: ${err.message}</p>`;
+      }
+    }
+
+    async function loadProjectFiles(project) {
+      const container = document.getElementById("fileTreeContainer");
+      const badge = document.getElementById("filesCountBadge");
+      try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(project)}/files`);
+        const data = await res.json();
+        const files = data.files || [];
+        badge.textContent = files.length;
+        container.innerHTML = "";
+
+        if (files.length === 0) {
+          container.innerHTML = '<p style="color:#64748b; font-size:0.8rem;">Directorio sin archivos.</p>';
+          return;
+        }
+
+        files.forEach(f => {
+          const item = document.createElement("div");
+          item.className = "file-item";
+          item.onclick = () => openFileCodeModal(project, f.path);
+
+          const icon = f.name.endsWith(".py") ? "🐍" : (f.is_memory ? "📜" : (f.is_security ? "🛡️" : "📄"));
+          const sizeKb = (f.size_bytes / 1024).toFixed(1);
+
+          item.innerHTML = `
+            <div class="file-left">
+              <span class="file-icon">${icon}</span>
+              <span>${escapeHtml(f.path)}</span>
+              ${f.is_memory ? '<span class="badge-memory-file">MEMORIA</span>' : ''}
+              ${f.is_security ? '<span class="badge-sec-file">DEVSECOPS</span>' : ''}
+            </div>
+            <span class="file-size">${sizeKb} KB</span>
+          `;
+          container.appendChild(item);
+        });
+      } catch (err) {
+        container.innerHTML = `<p style="color:#ef4444; font-size:0.8rem;">Error listando archivos: ${err.message}</p>`;
+      }
+    }
+
+    async function openFileCodeModal(project, relPath) {
+      document.getElementById("codeModalTitle").textContent = `${project} / ${relPath}`;
+      const body = document.getElementById("codeModalBody");
+      body.textContent = "Cargando archivo...";
+      document.getElementById("codeViewerModal").style.display = "flex";
+
+      try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(relPath)}`);
+        const data = await res.json();
+        body.textContent = data.content || "<Archivo vacío>";
+      } catch (err) {
+        body.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function closeCodeModal() {
+      document.getElementById("codeViewerModal").style.display = "none";
+    }
+
+    function switchTab(tab) {
+      document.getElementById("tabBtnSecurity").classList.toggle("active", tab === "security");
+      document.getElementById("tabBtnMemory").classList.toggle("active", tab === "memory");
+      document.getElementById("tabBtnFiles").classList.toggle("active", tab === "files");
+
+      document.getElementById("tabSecurity").classList.toggle("active", tab === "security");
+      document.getElementById("tabMemory").classList.toggle("active", tab === "memory");
+      document.getElementById("tabFiles").classList.toggle("active", tab === "files");
+    }
+
+    async function dispatchTask() {
+      const project = document.getElementById("projectSelect").value;
+      const prompt = document.getElementById("taskPrompt").value.trim();
+
+      if (!project) { alert("Selecciona o crea un proyecto primero."); return; }
+      if (!prompt) { alert("Escribe una instrucción técnica para el equipo."); return; }
+
+      setRunningState(true);
+      resetAgentCards();
+
+      try {
+        const res = await fetch("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_name: project, prompt })
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || "Fallo en el servidor");
+        }
+        document.getElementById("taskPrompt").value = "";
+      } catch (err) {
+        appendLog("SYSTEM", "Error al despachar: " + err.message, null, "error");
+        setRunningState(false);
+      }
+    }
+
+    function setRunningState(running) {
+      isRunning = running;
+      const btn = document.getElementById("btnDispatch");
+      const btnText = document.getElementById("btnText");
+      btn.disabled = running;
+      btnText.textContent = running ? "Agentes Trabajando..." : "Despachar Tarea";
+    }
+
+    function resetAgentCards() {
+      AGENTS.forEach(ag => {
+        const card = document.getElementById(`card-${ag}`);
+        const pill = document.getElementById(`pill-${ag}`);
+        const desc = document.getElementById(`desc-${ag}`);
+        if (card) card.classList.remove("status-THINKING", "status-WORKING", "status-SUCCESS", "status-ERROR");
+        if (pill) pill.textContent = "IDLE";
+        if (desc) desc.textContent = "Esperando asignación...";
+      });
+    }
+
+    function openNewProjectModal() {
+      document.getElementById("newProjectModal").style.display = "flex";
+      document.getElementById("newProjectName").focus();
+    }
+    function closeNewProjectModal() {
+      document.getElementById("newProjectModal").style.display = "none";
+      document.getElementById("newProjectName").value = "";
+    }
+    async function submitCreateProject() {
+      const name = document.getElementById("newProjectName").value.trim();
+      if (!name) return;
+      try {
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        if (!res.ok) throw new Error("Error creando proyecto");
+        closeNewProjectModal();
+        await loadProjects();
+        document.getElementById("projectSelect").value = name;
+        await refreshActiveProjectData();
+        appendLog("SYSTEM", `Proyecto '${name}' inicializado correctamente.`);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

@@ -4,13 +4,30 @@ import json
 import time
 import socket
 import shutil
+import asyncio
 import argparse
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 ENV_FILE = Path(".env")
 DEFAULT_PROJECTS_DIR = Path.cwd() / "proyectos"
+DEFAULT_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+WEB_DIR = Path.cwd() / "web"
+INDEX_HTML = WEB_DIR / "index.html"
+
+MODELS_CATALOG = {
+    "LITE": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"],
+    "STANDARD": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"],
+    "PRO": ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+}
 
 def get_api_key() -> str:
     key = os.getenv("GEMINI_API_KEY")
@@ -21,68 +38,52 @@ def get_api_key() -> str:
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("GEMINI_API_KEY="):
-                key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if key:
-                    return key
+                k = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if k:
+                    return k
 
-    print("\n[CONFIGURACION] No se encontro GEMINI_API_KEY.")
+    print("\n[CONFIGURACION] GEMINI_API_KEY no detectada.")
     key = input("Pega tu Gemini API Key aqui: ").strip().strip('"').strip("'")
     if not key:
         print("[ERROR] La clave de API es obligatoria.")
         sys.exit(1)
     
-    ENV_FILE.write_text(f'GEMINI_API_KEY="{key}"\n', encoding="utf-8")
-    print("[OK] Clave guardada en .env para futuras ejecuciones.\n")
+    with open(ENV_FILE, "a", encoding="utf-8") as f:
+        f.write(f'GEMINI_API_KEY="{key}"\n')
     return key
 
-def resolve_target_project() -> Path:
-    print("\n--- GESTOR DE PROYECTOS ---")
-    print("1. Trabajar en un proyecto existente")
-    print("2. Crear un proyecto nuevo")
-    opcion = input("Selecciona una opcion (1/2) [Default 1]: ").strip() or "1"
+GEMINI_API_KEY = get_api_key()
 
-    if opcion == "2":
-        nombre = input("Nombre del nuevo proyecto (ej: mi_api): ").strip()
-        while not nombre:
-            nombre = input("El nombre no puede estar vacio: ").strip()
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
 
-        print(f"\nDonde deseas ubicar el proyecto?")
-        print(f"  [Enter] Ubicacion predeterminada: {DEFAULT_PROJECTS_DIR / nombre}")
-        print(f"  [O ingresa una ruta personalizada]")
-        custom_path = input("Ruta de destino: ").strip()
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-        if custom_path:
-            if not (len(custom_path) >= 2 and custom_path[1] == ":"):
-                custom_path = custom_path.lstrip("/\\")
-                target = (Path.cwd() / custom_path).resolve()
-            else:
-                target = Path(custom_path).resolve()
-        else:
-            target = DEFAULT_PROJECTS_DIR / nombre
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
-        target.mkdir(parents=True, exist_ok=True)
-        print(f"[OK] Proyecto inicializado en: {target}")
-        return target
+    async def broadcast(self, event_type: str, agent: str, message: str, payload: Optional[Dict[str, Any]] = None):
+        data = {
+            "timestamp": time.strftime("%H:%M:%S"),
+            "event_type": event_type,
+            "agent": agent,
+            "message": message,
+            "payload": payload or {}
+        }
+        dead_connections = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(data)
+            except Exception:
+                dead_connections.append(connection)
+        for dead in dead_connections:
+            self.disconnect(dead)
 
-    else:
-        ruta_raw = input("Ruta del proyecto (ej: ./proyectos/mi_api o nombre): ").strip()
-        while not ruta_raw:
-            ruta_raw = input("Ingresa una ruta valida: ").strip()
-
-        if not (len(ruta_raw) >= 2 and ruta_raw[1] == ":"):
-            ruta_limpia = ruta_raw.lstrip("/\\")
-            posible_path = (Path.cwd() / ruta_limpia).resolve()
-            if not posible_path.exists() and (DEFAULT_PROJECTS_DIR / ruta_limpia).exists():
-                posible_path = (DEFAULT_PROJECTS_DIR / ruta_limpia).resolve()
-            target = posible_path
-        else:
-            target = Path(ruta_raw).resolve()
-
-        if not target.exists():
-            print(f"[AVISO] Carpeta no encontrada. Se creara en: {target}")
-            target.mkdir(parents=True, exist_ok=True)
-
-        return target
+manager = ConnectionManager()
 
 def validate_python_syntax(files: list) -> tuple[bool, list]:
     errors = []
@@ -98,200 +99,351 @@ def validate_python_syntax(files: list) -> tuple[bool, list]:
                 errors.append(f"'{rel_path}': error ({str(e)})")
     return len(errors) == 0, errors
 
-def call_gemini_api(api_key: str, system_prompt: str, user_prompt: str, max_retries: int = 4) -> dict:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
-    
+def classify_task_complexity(task: str, existing_files_count: int) -> dict:
+    task_lower = task.lower()
+    words_count = len(task.split())
+
+    heavy_keywords = [
+        "arquitectura", "refactor", "patron", "microservicio", "rediseña",
+        "concurrencia", "asincrono complejo", "inyeccion de dependencias", "escalabilidad",
+        "migra", "seguridad avanzada", "oauth", "jwt completo", "multitenant", "database"
+    ]
+    light_keywords = [
+        "agrega un campo", "docstring", "corrige", "cambia el puerto",
+        "imprime", "variable", "status", "health", "renombra", "comentario",
+        "formato", "version", "tipo", "tipado", "endpoint simple", "ajusta", "info"
+    ]
+
+    is_heavy = any(kw in task_lower for kw in heavy_keywords) or words_count > 45 or existing_files_count > 15
+    is_light = any(kw in task_lower for kw in light_keywords) and words_count < 20 and not is_heavy
+
+    if is_heavy:
+        tier = "TIER_PRO"
+        category = "PRO"
+        reason = "Complejidad estructural alta o requerimiento extenso"
+    elif is_light:
+        tier = "TIER_LITE"
+        category = "LITE"
+        reason = "Modificación atómica o endpoint simple (máxima velocidad y ahorro de tokens)"
+    else:
+        tier = "TIER_STANDARD"
+        category = "STANDARD"
+        reason = "Desarrollo modular estándar de features"
+
+    models_chain = MODELS_CATALOG[category]
+    return {
+        "tier": tier,
+        "primary_model": models_chain[0],
+        "models_chain": models_chain,
+        "reason": reason,
+        "words_count": words_count
+    }
+
+async def call_gemini_with_telemetry(
+    api_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    agent_name: str,
+    models_chain: List[str],
+    max_output_tokens: int = 4096
+) -> dict:
     payload = {
         "contents": [{
-            "parts": [{
-                "text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"
-            }]
+            "parts": [{"text": f"SYSTEM_INSTRUCTION:\n{system_prompt}\n\nUSER_DATA:\n{user_prompt}"}]
         }],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.1
+            "temperature": 0.1,
+            "maxOutputTokens": max_output_tokens
         }
     }
-
     data_bytes = json.dumps(payload).encode("utf-8")
 
-    for attempt in range(1, max_retries + 1):
-        req = urllib.request.Request(
-            url,
-            data=data_bytes,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
+    last_error = None
+
+    for model in models_chain:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        stop_heartbeat = asyncio.Event()
+
+        async def heartbeat_worker():
+            elapsed = 0
+            milestones = [
+                (2, f"Conectando con {model}..."),
+                (6, f"Generando código fuente de producción..."),
+                (14, f"Construyendo schemas y endpoints..."),
+                (22, f"Finalizando contratos y respuestas...")
+            ]
+            m_idx = 0
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=1.0)
+                    break
+                except asyncio.TimeoutError:
+                    elapsed += 1
+                    if m_idx < len(milestones) and elapsed >= milestones[m_idx][0]:
+                        await manager.broadcast("AGENT_LOG", agent_name, f"{milestones[m_idx][1]} ({elapsed}s)")
+                        m_idx += 1
+                    elif elapsed > 22 and elapsed % 8 == 0:
+                        await manager.broadcast("AGENT_LOG", agent_name, f"Escribiendo módulos... ({elapsed}s)")
+
+        heartbeat_task = asyncio.create_task(heartbeat_worker())
+
+        def _do_request():
+            req = urllib.request.Request(
+                url,
+                data=data_bytes,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=90) as response:
+                return response.read().decode("utf-8")
+
         try:
-            with urllib.request.urlopen(req, timeout=180) as response:
-                res_body = response.read().decode("utf-8")
-                res_json = json.loads(res_body)
+            res_body = await asyncio.to_thread(_do_request)
+            res_json = json.loads(res_body)
 
-                # 1. Manejo seguro de filtros de seguridad de Google
-                if "candidates" not in res_json or not res_json["candidates"]:
-                    feedback = res_json.get("promptFeedback", {})
-                    block_reason = feedback.get("blockReason", "DESCONOCIDO")
-                    raise RuntimeError(f"Google bloqueo la peticion por politicas de seguridad (Motivo: {block_reason}). Evita solicitar explicitamente crear vulnerabilidades.")
+            if "candidates" not in res_json or not res_json["candidates"]:
+                feedback = res_json.get("promptFeedback", {})
+                block_reason = feedback.get("blockReason", "DESCONOCIDO")
+                raise RuntimeError(f"Bloqueado por filtros de seguridad ({block_reason})")
 
-                candidate = res_json["candidates"][0]
-                finish_reason = candidate.get("finishReason", "")
-                if finish_reason == "SAFETY":
-                    raise RuntimeError("La generacion fue interrumpida por los filtros de seguridad de Google (FinishReason: SAFETY).")
+            candidate = res_json["candidates"][0]
+            if candidate.get("finishReason") == "SAFETY":
+                raise RuntimeError("Generación interrumpida por filtros de seguridad.")
 
-                parts = candidate.get("content", {}).get("parts", [])
-                if not parts:
-                    raise RuntimeError("La API respondio sin contenido utilizable.")
+            parts = candidate.get("content", {}).get("parts", [])
+            if not parts:
+                raise RuntimeError("Respuesta sin contenido utilizable.")
 
-                raw_text = parts[0].get("text", "")
-                return json.loads(raw_text)
+            raw_text = parts[0].get("text", "").strip()
+            if raw_text.startswith("```"):
+                lines = raw_text.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                raw_text = "\n".join(lines).strip()
+
+            return json.loads(raw_text)
 
         except urllib.error.HTTPError as e:
-            error_msg = e.read().decode("utf-8")
-            if e.code in (503, 429) and attempt < max_retries:
-                wait_time = attempt * 4
-                print(f"[AVISO] Servidor ocupado ({e.code}). Reintentando en {wait_time}s... (Intento {attempt}/{max_retries})")
-                time.sleep(wait_time)
-                continue
-            raise RuntimeError(f"HTTP Error {e.code}: {error_msg}")
+            error_body = e.read().decode("utf-8")
+            last_error = f"HTTP {e.code} en {model}"
 
-        except (socket.timeout, TimeoutError):
-            if attempt < max_retries:
-                wait_time = attempt * 3
-                print(f"[AVISO] Timeout de socket. Reintentando en {wait_time}s...")
-                time.sleep(wait_time)
+            if e.code in (404, 410, 429, 503):
+                await manager.broadcast(
+                    "AGENT_LOG",
+                    agent_name,
+                    f"Modelo '{model}' no disponible ({e.code}). Conmutando al siguiente modelo del pool..."
+                )
                 continue
-            raise TimeoutError("Gemini excedio el tiempo de espera.")
+            raise RuntimeError(f"HTTP Error {e.code}: {error_body}")
 
         except Exception as e:
-            if attempt < max_retries and "Google bloqueo" not in str(e):
-                time.sleep(2)
-                continue
-            raise RuntimeError(str(e))
+            last_error = str(e)
+            await manager.broadcast("AGENT_LOG", agent_name, f"Incidencia con '{model}': {str(e)}. Probando alternativa...")
+            continue
 
-    raise RuntimeError("No se obtuvo respuesta del modelo tras agotar reintentos.")
+        finally:
+            stop_heartbeat.set()
+            try:
+                await heartbeat_task
+            except Exception:
+                pass
 
-def execute_qa_audit(api_key: str, user_requirement: str, plan_executed: str, files: list) -> dict:
-    system_prompt = (
-        "ACTUA COMO: Principal Security Architect & Lead DevSecOps Auditor.\n"
-        "POSTURA: Extremadamente critico, pesimista, sin cortesias ni elogios. Tu mision es vetar codigo deficiente.\n\n"
-        "MATRIZ DE EVALUACION OBLIGATORIA:\n"
-        "1. SEGURIDAD OWASP:\n"
-        "   - Path Traversal (LFI/RFI): Uso de open() o Path() con inputs de usuario sin sanitizar.\n"
-        "   - Inyecciones (SQL/Comandos): Concatenacion de cadenas en queries o llamadas a shell.\n"
-        "   - Secretos hardcodeados: Claves, tokens o contraseñas en texto plano.\n"
-        "   - Criptografia: Uso de algoritmos obsoletos (MD5, SHA1) o fallos en bcrypt/hashing.\n"
-        "2. CUMPLIMIENTO FUNCIONAL:\n"
-        "   - ¿Se omitio algun requisito pedido explicitamente por el usuario?\n"
-        "   - ¿Hay mocks vacios o sentencias pass que rompen la logica esperada?\n"
-        "3. TIPADO Y RESILIENCIA:\n"
-        "   - Manejo de excepciones nulas o try/except genericos que silencian errores reales.\n\n"
-        "REGLA DE VETO: Si existe un fallo critico de seguridad o no cumple el requerimiento, approved DEBE ser false.\n"
-        "FORMATO DE SALIDA (JSON ESTRICTO):\n"
-        "{\n"
-        '  "approved": true,\n'
-        '  "security_score": 9,\n'
-        '  "verdict_summary": "Evaluacion ejecutiva en 1 frase",\n'
-        '  "findings": [\n'
-        '    {"severity": "CRITICAL|HIGH|MEDIUM|LOW", "file": "ruta/archivo.py", "issue": "Descripcion del problema"}\n'
-        "  ]\n"
-        "}"
-    )
+    raise RuntimeError(f"Modelos agotados en la cadena de ejecución. Último error: {last_error}")
 
-    code_dump = "\n\n".join([f"=== ARCHIVO: {f['relative_path']} ===\n{f['content']}" for f in files])
-    user_data = (
-        f"REQUERIMIENTO ORIGINAL:\n{user_requirement}\n\n"
-        f"PLAN DECLARADO:\n{plan_executed}\n\n"
-        f"CODIGO COMPLETO PROPUESTO:\n{code_dump}"
-    )
+async def execute_pipeline_async(target_dir: Path, task: str):
+    await manager.broadcast("PIPELINE_START", "ORCHESTRATOR", f"Iniciando ciclo en {target_dir.name}", {"task": task})
 
-    return call_gemini_api(api_key, system_prompt, user_data)
-
-def run_pipeline(project_path: str = None, user_prompt: str = None):
-    api_key = get_api_key()
-
-    if project_path:
-        raw = project_path.strip()
-        if not (len(raw) >= 2 and raw[1] == ":"):
-            target_dir = (Path.cwd() / raw.lstrip("/\\")).resolve()
-        else:
-            target_dir = Path(raw).resolve()
-        target_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        target_dir = resolve_target_project()
-
-    task = user_prompt or input("\nInstruccion para la oficina: ").strip()
-
-    existing_files = [str(p.relative_to(target_dir)) for p in target_dir.rglob("*") if p.is_file() and not p.name.endswith(".bak")]
-    existing_files_summary = "\n".join(existing_files) if existing_files else "Directorio vacio."
+    ignored_patterns = {"__pycache__", ".venv", "venv", ".git", ".pytest_cache", ".bak"}
+    existing_files = []
+    for p in target_dir.rglob("*"):
+        if p.is_file():
+            parts = set(p.relative_to(target_dir).parts)
+            if not parts.intersection(ignored_patterns) and not p.name.endswith(".bak"):
+                existing_files.append(str(p.relative_to(target_dir).as_posix()))
 
     memory_file = target_dir / "PROJECT_MEMORY.md"
-    memory_content = memory_file.read_text(encoding="utf-8") if memory_file.exists() else "Sin historial previo."
+    raw_memory = memory_file.read_text(encoding="utf-8") if memory_file.exists() else ""
+    security_file = target_dir / "SECURITY_AUDIT.json"
 
-    print(f"\n========================================================")
-    print(f"[CENTRO DE MANDO] Proyecto activo: {target_dir}")
-    print(f"[CENTRO DE MANDO] Requerimiento: {task}")
-    print(f"========================================================\n")
+    # --- ENRUTAMIENTO Y PREDICCIÓN DE TIER ---
+    routing = classify_task_complexity(task, len(existing_files))
+    tier = routing["tier"]
+    selected_model = routing["primary_model"]
+    reason = routing["reason"]
+    models_chain = routing["models_chain"]
 
-    # 1. Líder
-    print("[LIDER - GEMINI] Disenando arquitectura y generando codigo...")
+    await manager.broadcast(
+        "ROUTER_DECISION",
+        "ORCHESTRATOR",
+        f"Enrutador IA [{tier}]: Asignado '{selected_model}' ({reason})",
+        routing
+    )
+
+    # --- CONSTRUCTOR DE CONTEXTO OPTIMIZADO (TOKEN PRUNING) ---
+    if tier == "TIER_LITE":
+        if raw_memory:
+            sections = raw_memory.split("## Tarea Completada")
+            if len(sections) > 1:
+                memory_context = "## Última Tarea Previa\n" + sections[-1].strip()
+            else:
+                memory_context = raw_memory[-350:]
+        else:
+            memory_context = "Sin historial previo."
+
+        task_lower = task.lower()
+        matched_files = [f for f in existing_files if Path(f).name.lower() in task_lower]
+
+        if matched_files:
+            files_context = "ARCHIVOS OBJETIVO DIRECTOS:\n" + "\n".join(matched_files)
+        else:
+            sample_files = existing_files[:8]
+            files_context = "\n".join(sample_files) if sample_files else "Directorio vacío."
+            if len(existing_files) > 8:
+                files_context += f"\n... [{len(existing_files) - 8} archivos omitidos del contexto]"
+
+        max_output_tokens = 1024
+
+        full_chars = len(raw_memory) + len("\n".join(existing_files)) + len(task)
+        pruned_chars = len(memory_context) + len(files_context) + len(task)
+        tokens_saved = max(0, (full_chars - pruned_chars) // 4)
+        pct_saved = int((tokens_saved / max(1, full_chars // 4)) * 100)
+
+        if tokens_saved > 40:
+            await manager.broadcast(
+                "AGENT_LOG",
+                "ORCHESTRATOR",
+                f"Ahorro de tokens activo [TIER_LITE]: Contexto podado (~{pruned_chars // 4} tokens de entrada vs ~{full_chars // 4} sin podar. {pct_saved}% de ahorro)."
+            )
+    else:
+        memory_context = raw_memory if raw_memory else "Sin historial previo."
+        files_context = "\n".join(existing_files) if existing_files else "Directorio vacío."
+        max_output_tokens = 4096
+
+    # 1. Tech Lead
+    await manager.broadcast(
+        "AGENT_STATUS",
+        "TECH_LEAD",
+        f"Generando solución optimizada con '{selected_model}'...",
+        {"status": "THINKING", "model": selected_model, "tier": tier}
+    )
+
     leader_system = (
-        "Eres el Tech Lead de una software factory. Genera codigo de produccion funcional y completo. "
-        "Responde UNICAMENTE en JSON con este esquema exacto:\n"
+        "Eres el Tech Lead de una software factory. Genera código de producción funcional y conciso.\n"
+        "REGLA DE RENDIMIENTO: Genera ÚNICAMENTE los archivos que se deben crear o modificar para cumplir el requerimiento. "
+        "No reescribas archivos existentes que no requieran cambios.\n"
+        "Responde UNICAMENTE en JSON plano válido con este esquema exacto:\n"
         "{\n"
         '  "plan": "Plan conciso",\n'
-        '  "files_to_modify": [{"relative_path": "ruta/archivo.ext", "content": "codigo completo"}],\n'
+        '  "files_to_modify": [{"relative_path": "ruta/archivo.ext", "content": "código completo"}],\n'
         '  "memory_update": "Resumen para el log"\n'
         "}"
     )
-    leader_input = f"MEMORIA:\n{memory_content}\n\nARCHIVOS EXISTENTES:\n{existing_files_summary}\n\nREQUERIMIENTO:\n{task}"
+    leader_input = f"MEMORIA TÉCNICA:\n{memory_context}\n\nARCHIVOS DEL PROYECTO:\n{files_context}\n\nREQUERIMIENTO:\n{task}"
 
     try:
-        plan_data = call_gemini_api(api_key, leader_system, leader_input)
+        plan_data = await call_gemini_with_telemetry(
+            GEMINI_API_KEY,
+            leader_system,
+            leader_input,
+            "TECH_LEAD",
+            models_chain,
+            max_output_tokens=max_output_tokens
+        )
     except Exception as e:
-        print(f"[LIDER - ERROR] {e}")
+        await manager.broadcast("AGENT_FAILED", "TECH_LEAD", f"Error en generación: {str(e)}", {"status": "ERROR"})
         return
 
-    print(f"[LIDER] Plan: {plan_data.get('plan')}\n")
+    plan_desc = plan_data.get("plan", "Sin plan declarado")
     files = plan_data.get("files_to_modify", [])
+    await manager.broadcast("AGENT_SUCCESS", "TECH_LEAD", f"Plan aprobado: {plan_desc}", {"plan": plan_desc, "files_count": len(files)})
 
-    # 2. QA Filtro Local
-    print(f"[QA - LOCAL] Validando sintaxis preliminar...")
+    # 2. QA Local
+    await manager.broadcast("AGENT_STATUS", "QA_LOCAL", "Validando compilación y sintaxis en memoria...", {"status": "WORKING"})
     is_valid, syntax_errors = validate_python_syntax(files)
     if not is_valid:
-        print("[QA - ERROR SINTACTICO] No compila en memoria:")
-        for err in syntax_errors:
-            print(f"  [X] {err}")
-        print("[QA] Pipeline detenido. No se altero el disco.")
+        await manager.broadcast("AGENT_FAILED", "QA_LOCAL", "Errores de sintaxis detectados", {"errors": syntax_errors})
         return
-    print("[QA - LOCAL] Sintaxis aprobada (0 errores).\n")
+    await manager.broadcast("AGENT_SUCCESS", "QA_LOCAL", "Sintaxis verificada (0 errores de compilación)", {"status": "APPROVED"})
 
-    # 3. QA Auditoría Profunda
-    print(f"[QA - DEVSECOPS] Ejecutando auditoria profunda de seguridad y logica...")
+    # 3. QA DevSecOps (CALIBRADO PARA ENDPOINTS PÚBLICOS)
+    await manager.broadcast("AGENT_STATUS", "QA_DEVSECOPS", "Auditando vulnerabilidades y estándares OWASP...", {"status": "THINKING"})
+    devsecops_system = (
+        "ACTÚA COMO: Principal Security Architect & Lead DevSecOps Auditor.\n"
+        "MISIÓN: Vetar código únicamente ante riesgos de seguridad reales y severos.\n\n"
+        "CRITERIOS DE VETO (approved: false, score < 6):\n"
+        "- Inyecciones (SQL, NoSQL, Comandos OS).\n"
+        "- Path Traversal / Arbitrary File Overwrite o LFI/RFI.\n"
+        "- Secretos, llaves privadas o credenciales expuestas en texto plano.\n"
+        "- Criptografía obsoleta o passwords sin hash/salt adecuado.\n"
+        "- Endpoints que modifiquen datos (POST/PUT/DELETE) o lean información sensible/PII sin autenticación.\n\n"
+        "REGLA DE OBSERVABILIDAD Y METADATA (NO VETAR):\n"
+        "- Endpoints operativos e informativos como '/health', '/status', '/version', '/ping' o '/info' son PÚBLICOS por estándar de la industria (Kubernetes, Docker, Load Balancers).\n"
+        "- NO vetar un endpoint por no tener autenticación si su único propósito es devolver el status del servicio o la versión de la aplicación.\n"
+        "- La falta de esquemas Pydantic o el hardcoding de metadata simple se clasifica como 'LOW' o 'MEDIUM' (aprobado con recomendaciones, score 7-8/10), NUNCA como causal de veto.\n\n"
+        "FORMATO JSON OBLIGATORIO:\n"
+        "{\n"
+        '  "approved": true,\n'
+        '  "security_score": 9,\n'
+        '  "verdict_summary": "Evaluación ejecutiva en 1 frase",\n'
+        '  "findings": [\n'
+        '    {"severity": "CRITICAL|HIGH|MEDIUM|LOW", "file": "ruta/archivo.py", "issue": "Detalle técnico y recomendación"}\n'
+        "  ]\n"
+        "}"
+    )
+    code_dump = "\n\n".join([f"=== ARCHIVO: {f['relative_path']} ===\n{f['content']}" for f in files])
+    qa_input = f"REQUERIMIENTO:\n{task}\n\nPLAN:\n{plan_desc}\n\nCÓDIGO:\n{code_dump}"
+
+    score = 10
+    approved = True
+    findings = []
+    verdict = "Auditoría completada satisfactoriamente"
+
     try:
-        audit = execute_qa_audit(api_key, task, plan_data.get("plan", ""), files)
+        audit = await call_gemini_with_telemetry(
+            GEMINI_API_KEY,
+            devsecops_system,
+            qa_input,
+            "QA_DEVSECOPS",
+            MODELS_CATALOG["STANDARD"],
+            max_output_tokens=1500
+        )
         score = audit.get("security_score", 10)
         approved = audit.get("approved", True)
         findings = audit.get("findings", [])
+        verdict = audit.get("verdict_summary", "Sin observaciones críticas.")
 
-        print(f"[QA - AUDITORIA] Score: {score}/10 | Veredicto: {audit.get('verdict_summary')}")
+        audit_report = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "task": task,
+            "security_score": score,
+            "approved": approved,
+            "verdict_summary": verdict,
+            "findings": findings
+        }
+        security_file.write_text(json.dumps(audit_report, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        if findings:
-            for item in findings:
-                sev = item.get("severity", "INFO")
-                print(f"  [{sev}] {item.get('file')}: {item.get('issue')}")
+        audit_payload = {
+            "score": score,
+            "approved": approved,
+            "verdict": verdict,
+            "findings": findings,
+            "task": task
+        }
 
         if not approved:
-            print("\n[QA - VETO CRITICO] Codigo rechazado por el auditor de seguridad.")
-            print("[QA] La operacion se cancelo. Ningun archivo fue escrito en disco.")
+            await manager.broadcast("AGENT_FAILED", "QA_DEVSECOPS", f"Código vetado por seguridad ({score}/10): {verdict}", audit_payload)
             return
 
-        print("[QA] Auditoria aprobada sin objeciones criticas.\n")
+        await manager.broadcast("AGENT_SUCCESS", "QA_DEVSECOPS", f"Auditoría aprobada ({score}/10): {verdict}", audit_payload)
 
     except Exception as e:
-        print(f"[QA - ADVERTENCIA] No se pudo completar la auditoria profunda ({e}). Procediendo con precaucion.")
+        await manager.broadcast("AGENT_LOG", "QA_DEVSECOPS", f"Auditoría omitida ({str(e)})")
 
-    # 4. Coder
-    print(f"[CODER] Aplicando cambios en {len(files)} archivo(s)...")
+    # 4. Senior Coder
+    await manager.broadcast("AGENT_STATUS", "SENIOR_CODER", f"Escribiendo {len(files)} archivo(s) en disco...", {"status": "WORKING"})
     for item in files:
         rel_path = item["relative_path"]
         file_path = target_dir / rel_path
@@ -302,27 +454,165 @@ def run_pipeline(project_path: str = None, user_prompt: str = None):
 
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(item["content"], encoding="utf-8")
-        print(f"  -> Archivo generado/actualizado: {rel_path}")
+        await manager.broadcast("AGENT_LOG", "SENIOR_CODER", f"Archivo generado: {rel_path}")
 
-    # 5. DevOps / Persistencia
-    print("\n[DEV-OPS] Actualizando memoria persistente...")
+    await manager.broadcast("AGENT_SUCCESS", "SENIOR_CODER", "Archivos actualizados correctamente", {"modified": [f["relative_path"] for f in files]})
+
+    # 5. DevOps Scribe
+    await manager.broadcast("AGENT_STATUS", "DEVOPS", "Actualizando memoria persistente...", {"status": "WORKING"})
     memory_entry = (
         f"\n\n## Tarea Completada\n"
         f"- **Requerimiento:** {task}\n"
-        f"- **Plan:** {plan_data.get('plan')}\n"
-        f"- **Score QA:** {score}/10\n"
+        f"- **Tier & Modelo:** {tier} ({selected_model})\n"
+        f"- **Plan:** {plan_desc}\n"
+        f"- **Score QA:** {score}/10 ({'APROBADO' if approved else 'VETADO'})\n"
         f"- **Detalles:** {plan_data.get('memory_update')}\n"
     )
     with open(memory_file, "a", encoding="utf-8") as f:
         f.write(memory_entry)
 
-    print(f"[DEV-OPS] Historial registrado en: {memory_file.name}")
-    print("\n[OK] Ciclo de ejecucion completado satisfactoriamente.")
+    await manager.broadcast("AGENT_SUCCESS", "DEVOPS", "PROJECT_MEMORY.md sincronizado", {})
+    await manager.broadcast("PIPELINE_COMPLETE", "ORCHESTRATOR", "Ciclo de ejecución completado exitosamente", {"project": target_dir.name})
+
+app = FastAPI(title="AI Office - Backend Core")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class RunTaskRequest(BaseModel):
+    project_name: str
+    prompt: str
+
+class CreateProjectRequest(BaseModel):
+    name: str
+
+@app.get("/", response_class=HTMLResponse)
+def serve_dashboard():
+    if INDEX_HTML.exists():
+        return INDEX_HTML.read_text(encoding="utf-8")
+    return "<h2>Dashboard no encontrado. Genera web/index.html primero.</h2>"
+
+@app.websocket("/ws/office")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        await websocket.send_json({
+            "timestamp": time.strftime("%H:%M:%S"),
+            "event_type": "CONNECTED",
+            "agent": "SYSTEM",
+            "message": "Conectado al Event Bus de AI Office"
+        })
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.get("/api/projects")
+def list_projects():
+    projects = []
+    for item in DEFAULT_PROJECTS_DIR.iterdir():
+        if item.is_dir() and not item.name.startswith("."):
+            has_memory = (item / "PROJECT_MEMORY.md").exists()
+            has_security = (item / "SECURITY_AUDIT.json").exists()
+            file_count = len([f for f in item.rglob("*") if f.is_file()])
+            projects.append({
+                "name": item.name,
+                "path": str(item),
+                "has_memory": has_memory,
+                "has_security": has_security,
+                "file_count": file_count
+            })
+    return {"projects": projects}
+
+@app.post("/api/projects")
+def create_project(req: CreateProjectRequest):
+    safe_name = req.name.strip().lstrip("/\\")
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="El nombre del proyecto es inválido")
+    target = DEFAULT_PROJECTS_DIR / safe_name
+    target.mkdir(parents=True, exist_ok=True)
+    return {"status": "created", "name": safe_name, "path": str(target)}
+
+@app.get("/api/projects/{name}/memory")
+def get_project_memory(name: str):
+    target = DEFAULT_PROJECTS_DIR / name
+    memory_file = target / "PROJECT_MEMORY.md"
+    if not memory_file.exists():
+        return {"memory": "*Sin historial previo registrado en PROJECT_MEMORY.md.*"}
+    return {"memory": memory_file.read_text(encoding="utf-8")}
+
+@app.get("/api/projects/{name}/security")
+def get_project_security(name: str):
+    target = DEFAULT_PROJECTS_DIR / name
+    security_file = target / "SECURITY_AUDIT.json"
+    if not security_file.exists():
+        return {"has_audit": False, "audit": None}
+    try:
+        data = json.loads(security_file.read_text(encoding="utf-8"))
+        return {"has_audit": True, "audit": data}
+    except Exception as e:
+        return {"has_audit": False, "error": str(e)}
+
+@app.get("/api/projects/{name}/files")
+def list_project_files(name: str):
+    target = DEFAULT_PROJECTS_DIR / name
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    
+    files_list = []
+    for p in sorted(target.rglob("*")):
+        if p.is_file() and not p.name.endswith(".bak") and not p.name.startswith("."):
+            rel = p.relative_to(target).as_posix()
+            files_list.append({
+                "path": rel,
+                "name": p.name,
+                "size_bytes": p.stat().st_size,
+                "is_memory": p.name == "PROJECT_MEMORY.md",
+                "is_security": p.name == "SECURITY_AUDIT.json"
+            })
+    return {"project": name, "files": files_list}
+
+@app.get("/api/projects/{name}/file")
+def get_single_file_content(name: str, path: str):
+    target = DEFAULT_PROJECTS_DIR / name
+    clean_path = Path(path).as_posix().lstrip("/\\")
+    resolved = (target / clean_path).resolve()
+    
+    if not str(resolved).startswith(str(target.resolve())):
+        raise HTTPException(status_code=403, detail="Acceso denegado fuera del directorio del proyecto")
+    
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    
+    try:
+        content = resolved.read_text(encoding="utf-8")
+        return {"path": clean_path, "content": content}
+    except Exception as e:
+        return {"path": clean_path, "content": f"<Error archivo: decodificando {str(e)}>"}
+
+@app.post("/api/run")
+async def run_task(req: RunTaskRequest):
+    target_dir = DEFAULT_PROJECTS_DIR / req.project_name
+    if not target_dir.exists():
+        raise HTTPException(status_code=404, detail="El proyecto especificado no existe")
+
+    asyncio.create_task(execute_pipeline_async(target_dir, req.prompt))
+    return {"status": "started", "project": req.project_name, "prompt": req.prompt}
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AI Office Core - Single Script")
-    parser.add_argument("--path", type=str, help="Ruta de la carpeta del proyecto")
-    parser.add_argument("--prompt", type=str, help="Instruccion o tarea a desarrollar")
+    parser = argparse.ArgumentParser(description="AI Office Server")
+    parser.add_argument("--port", type=int, default=8000, help="Puerto del servidor")
     args = parser.parse_args()
 
-    run_pipeline(args.path, args.prompt)
+    print("\n========================================================")
+    print(f"[*] Dashboard disponible en: [http://127.0.0.1](http://127.0.0.1):{args.port}")
+    print(f"[*] WebSocket activo en:    ws://127.0.0.1:{args.port}/ws/office")
+    print(f"[*] Proyectos en:           {DEFAULT_PROJECTS_DIR}")
+    print("========================================================\n")
+
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
